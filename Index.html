@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipeline Decryption Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            50: '#f0fdfa',
+                            100: '#ccfbf1',
+                            500: '#14b8a6',
+                            800: '#115e59',
+                            900: '#0f172a',
+                            950: '#020617',
+                            accent: '#06b6d4'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['Fira Code', 'JetBrains Mono', 'ui-monospace', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Pako Library for Zlib/Gzip wbits=47 Decompression -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #020617; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #334155; }
+        
+        .json-key { color: #38bdf8; }
+        .json-string { color: #4ade80; }
+        .json-number { color: #facc15; }
+        .json-boolean { color: #f472b6; }
+        .json-null { color: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-cyan-500 selection:text-black">
+
+    <!-- Navbar -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="p-2 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400">
+                    <i data-lucide="unlock" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg text-slate-100 flex items-center gap-2">
+                        Python Reverse Decoder <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">zlib/gzip</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">wbits=47 &rarr; Base64 &rarr; XOR 0xC8 &rarr; UTF-16LE &rarr; JSON</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center space-x-4 text-xs font-mono">
+                <div class="hidden md:flex items-center space-x-2 text-slate-400 bg-slate-950 px-3 py-1.5 rounded-md border border-slate-800">
+                    <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Status: Engine Ready</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- Config Bar -->
+        <section class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-6">
+                <!-- XOR Key Control -->
+                <div class="flex items-center space-x-2 text-sm">
+                    <label class="text-slate-400 font-mono text-xs">XOR Byte Key (Hex):</label>
+                    <input type="text" id="xor-key-input" value="0xC8" class="w-24 bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-cyan-400 font-mono text-center text-xs focus:outline-none focus:border-cyan-500">
+                </div>
+                <div class="flex items-center space-x-2 text-xs text-slate-500 font-mono">
+                    <i data-lucide="info" class="w-4 h-4 text-cyan-400"></i>
+                    <span>Matches Python: <code class="text-cyan-300">bytes(b ^ 0xC8 for b in step).decode("utf-16-le")</code></span>
+                </div>
+            </div>
+
+            <!-- Global Action Buttons -->
+            <div class="flex items-center space-x-3">
+                <button onclick="clearAll()" class="px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/30 rounded-lg transition flex items-center gap-1.5">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> Clear All
+                </button>
+                <button id="batch-download-btn" onclick="downloadAllProcessed()" disabled class="px-3.5 py-1.5 text-xs font-medium bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700 rounded-lg transition flex items-center gap-1.5">
+                    <i data-lucide="archive-restore" class="w-4 h-4"></i> Download All JSONs
+                </button>
+            </div>
+        </section>
+
+        <!-- Dropzone Section -->
+        <div id="dropzone-section" class="space-y-4">
+            <div id="dropzone" class="border-2 border-dashed border-slate-800 hover:border-cyan-500/50 bg-slate-900/50 hover:bg-slate-900 transition-all rounded-xl p-8 text-center cursor-pointer relative group">
+                <input type="file" id="file-input" multiple class="hidden" onchange="handleFileSelect(event)">
+                <div class="flex flex-col items-center justify-center space-y-3">
+                    <div class="p-4 bg-slate-950 border border-slate-800 rounded-full group-hover:scale-110 group-hover:border-cyan-500/40 transition">
+                        <i data-lucide="file-up" class="w-8 h-8 text-cyan-400"></i>
+                    </div>
+                    <div>
+                        <p class="text-slate-200 font-medium text-base">Drag & Drop encoded file(s) here</p>
+                        <p class="text-slate-500 text-xs mt-1">Upload files to run the exact decompression & decryption sequence</p>
+                    </div>
+                    <button class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-semibold text-xs rounded-lg transition shadow-lg shadow-cyan-950">
+                        Select Encrypted Files
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Queue Table -->
+        <section id="batch-table-container" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hidden">
+            <div class="px-4 py-3 border-b border-slate-800 flex justify-between items-center">
+                <h3 class="text-xs font-mono font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <i data-lucide="layers" class="w-4 h-4 text-cyan-400"></i> Processing Queue
+                </h3>
+                <span id="queue-counter" class="text-xs text-slate-500 font-mono">0 files</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-mono">
+                    <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+                        <tr>
+                            <th class="px-4 py-3">File Name</th>
+                            <th class="px-4 py-3">Raw Size</th>
+                            <th class="px-4 py-3">Pipeline Status</th>
+                            <th class="px-4 py-3">JSON Size</th>
+                            <th class="px-4 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="file-queue-body" class="divide-y divide-slate-800/50">
+                        <!-- Dynamic Queue Rows -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Pipeline Step Visual Inspector -->
+        <section id="pipeline-inspector" class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 hidden">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-2">
+                    <i data-lucide="workflow" class="w-5 h-5 text-cyan-400"></i>
+                    <h2 class="font-semibold text-slate-200 text-sm">Pipeline Step Breakdown</h2>
+                    <span id="active-file-label" class="text-xs font-mono text-cyan-400 bg-cyan-950/60 px-2.5 py-0.5 rounded border border-cyan-800/50">None</span>
+                </div>
+                <div id="overall-status-badge" class="px-2.5 py-1 rounded-full text-xs font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    Inspecting
+                </div>
+            </div>
+
+            <!-- Pipeline Cards -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                <!-- Step 1 -->
+                <div id="step-card-1" class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-300 font-mono font-semibold">1. Raw Binary</span>
+                        <i id="step-icon-1" data-lucide="clock" class="w-4 h-4 text-slate-500"></i>
+                    </div>
+                    <p class="text-[10px] text-slate-500">Reads binary input stream</p>
+                    <div id="step-preview-1" class="text-[10px] font-mono text-slate-400 bg-slate-900 p-2 rounded truncate max-h-16 overflow-hidden border border-slate-800/80">
+                        Waiting...
+                    </div>
+                </div>
+
+                <!-- Step 2 -->
+                <div id="step-card-2" class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-300 font-mono font-semibold">2. Decompress</span>
+                        <i id="step-icon-2" data-lucide="clock" class="w-4 h-4 text-slate-500"></i>
+                    </div>
+                    <p class="text-[10px] text-slate-500">Pako zlib/gzip (wbits=47)</p>
+                    <div id="step-preview-2" class="text-[10px] font-mono text-slate-400 bg-slate-900 p-2 rounded truncate max-h-16 overflow-hidden border border-slate-800/80">
+                        Waiting...
+                    </div>
+                </div>
+
+                <!-- Step 3 -->
+                <div id="step-card-3" class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-300 font-mono font-semibold">3. Base64 Decode</span>
+                        <i id="step-icon-3" data-lucide="clock" class="w-4 h-4 text-slate-500"></i>
+                    </div>
+                    <p class="text-[10px] text-slate-500">Decodes Base64 into step bytes</p>
+                    <div id="step-preview-3" class="text-[10px] font-mono text-slate-400 bg-slate-900 p-2 rounded truncate max-h-16 overflow-hidden border border-slate-800/80">
+                        Waiting...
+                    </div>
+                </div>
+
+                <!-- Step 4 -->
+                <div id="step-card-4" class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-300 font-mono font-semibold">4. XOR 0xC8</span>
+                        <i id="step-icon-4" data-lucide="clock" class="w-4 h-4 text-slate-500"></i>
+                    </div>
+                    <p class="text-[10px] text-slate-500">XOR byte transformation</p>
+                    <div id="step-preview-4" class="text-[10px] font-mono text-slate-400 bg-slate-900 p-2 rounded truncate max-h-16 overflow-hidden border border-slate-800/80">
+                        Waiting...
+                    </div>
+                </div>
+
+                <!-- Step 5 -->
+                <div id="step-card-5" class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-300 font-mono font-semibold">5. UTF-16LE / JSON</span>
+                        <i id="step-icon-5" data-lucide="clock" class="w-4 h-4 text-slate-500"></i>
+                    </div>
+                    <p class="text-[10px] text-slate-500">UTF-16LE & JSON.parse()</p>
+                    <div id="step-preview-5" class="text-[10px] font-mono text-slate-400 bg-slate-900 p-2 rounded truncate max-h-16 overflow-hidden border border-slate-800/80">
+                        Waiting...
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Output JSON Preview Section -->
+        <section id="output-section" class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 hidden">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-3">
+                    <div class="p-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-emerald-400">
+                        <i data-lucide="code-2" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h2 class="font-semibold text-slate-200 text-sm">Decoded JSON Preview</h2>
+                        <span id="output-stats-ratio" class="text-xs text-slate-400 font-mono">Ratio: -</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-2">
+                    <button onclick="copyToClipboard()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs rounded transition flex items-center gap-1.5 border border-slate-700">
+                        <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy JSON
+                    </button>
+                    <button id="download-output-btn" onclick="downloadActiveFile()" class="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-semibold text-xs rounded transition flex items-center gap-1.5 shadow">
+                        <i data-lucide="download" class="w-4 h-4"></i> Download .json
+                    </button>
+                </div>
+            </div>
+
+            <!-- Error Box -->
+            <div id="error-log-box" class="hidden p-3 bg-rose-950/40 border border-rose-800/50 rounded-lg text-rose-300 text-xs font-mono space-y-1">
+                <div class="flex items-center gap-2 font-semibold text-rose-400">
+                    <i data-lucide="alert-triangle" class="w-4 h-4"></i> Pipeline Failure Logged
+                </div>
+                <p id="error-log-msg" class="text-rose-200/80">Failed to process file.</p>
+            </div>
+
+            <!-- JSON Output Element -->
+            <div class="relative bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-[500px]">
+                <pre id="json-highlighted-output" class="whitespace-pre-wrap break-words text-slate-300"></pre>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- JavaScript Execution Engine -->
+    <script>
+        let processedFiles = [];
+        let activeFileId = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            setupDropzone();
+        });
+
+        function setupDropzone() {
+            const dropzone = document.getElementById('dropzone');
+
+            ['dragenter', 'dragover'].forEach(name => {
+                dropzone.addEventListener(name, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropzone.classList.add('border-cyan-500', 'bg-slate-900');
+                }, false);
+            });
+
+            ['dragleave', 'drop'].forEach(name => {
+                dropzone.addEventListener(name, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropzone.classList.remove('border-cyan-500', 'bg-slate-900');
+                }, false);
+            });
+
+            dropzone.addEventListener('drop', (e) => {
+                const files = e.dataTransfer.files;
+                if (files.length > 0) processUploadedFiles(Array.from(files));
+            });
+
+            dropzone.addEventListener('click', () => {
+                document.getElementById('file-input').click();
+            });
+        }
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            if (files.length > 0) processUploadedFiles(files);
+        }
+
+        async function processUploadedFiles(files) {
+            document.getElementById('batch-table-container').classList.remove('hidden');
+
+            for (const file of files) {
+                const fileObj = {
+                    id: 'file-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+                    name: file.name,
+                    size: file.size,
+                    status: 'processing',
+                    decodedText: '',
+                    jsonObject: null,
+                    error: null,
+                    stepsData: {}
+                };
+
+                processedFiles.push(fileObj);
+                renderBatchTable();
+
+                try {
+                    const rawBuffer = await file.arrayBuffer();
+                    await runPythonPipeline(fileObj, rawBuffer);
+                } catch (err) {
+                    fileObj.status = 'failed';
+                    fileObj.error = err.message || 'Error executing pipeline';
+                }
+
+                renderBatchTable();
+                if (processedFiles.length === 1 || activeFileId === null) {
+                    inspectFile(fileObj.id);
+                }
+            }
+
+            updateBatchControls();
+        }
+
+        /*
+            EXACT PYTHON REPLICATION:
+            raw = open("yourfile.json", "rb").read()
+            step = base64.b64decode(zlib.decompress(raw, wbits=47))
+            text = bytes(b ^ 0xC8 for b in step).decode("utf-16-le")
+            obj = json.loads(text)
+        */
+        async function runPythonPipeline(fileObj, rawBuffer) {
+            const xorHex = document.getElementById('xor-key-input').value.trim() || '0xC8';
+            const xorKey = parseInt(xorHex, 16) || 0xC8;
+
+            try {
+                // Step 1: Raw Bytes
+                const rawBytes = new Uint8Array(rawBuffer);
+                fileObj.stepsData.step1 = `Read ${rawBytes.length} raw bytes`;
+
+                // Step 2: Decompress using Pako with wbits=47 (Auto Zlib/Gzip Header detection)
+                let decompressedBytes;
+                try {
+                    // wbits = 47 enables zlib and gzip header detection (32 + 15)
+                    decompressedBytes = pako.inflate(rawBytes, { windowBits: 47 });
+                } catch (pakoErr) {
+                    // Fallback attempt: plain inflate or ungzip
+                    try {
+                        decompressedBytes = pako.ungzip(rawBytes);
+                    } catch (gzipErr) {
+                        throw new Error(`Decompression Failed (zlib/gzip wbits=47): ${pakoErr.message}`);
+                    }
+                }
+
+                // Decode decompressed stream as ASCII/UTF-8 string containing Base64
+                const decompressedStr = new TextDecoder('ascii').decode(decompressedBytes).trim().replace(/[\r\n\s]/g, '');
+                fileObj.stepsData.step2 = `Decompressed to ${decompressedBytes.length} bytes string. Preview: ${decompressedStr.slice(0, 30)}...`;
+
+                // Step 3: Base64 Decode
+                let stepBytes;
+                try {
+                    const b64DecodedStr = atob(decompressedStr);
+                    stepBytes = new Uint8Array(b64DecodedStr.length);
+                    for (let i = 0; i < b64DecodedStr.length; i++) {
+                        stepBytes[i] = b64DecodedStr.charCodeAt(i);
+                    }
+                } catch (b64Err) {
+                    throw new Error(`Base64 Decoding Failed: ${b64Err.message}`);
+                }
+                fileObj.stepsData.step3 = `Base64 decoded ${stepBytes.length} bytes`;
+
+                // Step 4: XOR Bytes with 0xC8
+                const xorBytes = new Uint8Array(stepBytes.length);
+                for (let i = 0; i < stepBytes.length; i++) {
+                    xorBytes[i] = stepBytes[i] ^ xorKey;
+                }
+                fileObj.stepsData.step4 = `XOR with ${xorHex} applied over ${xorBytes.length} bytes`;
+
+                // Step 5: UTF-16LE Decoding & JSON Parsing
+                const utf16Decoder = new TextDecoder('utf-16le');
+                const decodedText = utf16Decoder.decode(xorBytes);
+                fileObj.decodedText = decodedText;
+
+                try {
+                    fileObj.jsonObject = JSON.parse(decodedText);
+                    fileObj.stepsData.step5 = `Successfully parsed JSON Object (${Object.keys(fileObj.jsonObject).length} root keys)`;
+                    fileObj.status = 'success';
+                } catch (jsonErr) {
+                    fileObj.stepsData.step5 = `UTF-16LE decoded text string but JSON.parse failed.`;
+                    throw new Error(`JSON Parse Error: ${jsonErr.message}. Output was: ${decodedText.slice(0, 50)}...`);
+                }
+
+            } catch (err) {
+                fileObj.status = 'failed';
+                fileObj.error = err.message;
+            }
+        }
+
+        function renderBatchTable() {
+            const tbody = document.getElementById('file-queue-body');
+            tbody.innerHTML = '';
+            document.getElementById('queue-counter').innerText = `${processedFiles.length} file(s)`;
+
+            processedFiles.forEach(file => {
+                const tr = document.createElement('tr');
+                tr.className = `hover:bg-slate-800/40 transition cursor-pointer ${activeFileId === file.id ? 'bg-slate-800/60' : ''}`;
+                tr.onclick = () => inspectFile(file.id);
+
+                const statusBadge = file.status === 'success' 
+                    ? '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">SUCCESS</span>'
+                    : file.status === 'failed'
+                    ? '<span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/10 text-rose-400 border border-rose-500/30">FAILED</span>'
+                    : '<span class="px-2 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/30">PROCESSING</span>';
+
+                const jsonSize = file.decodedText ? formatBytes(new Blob([file.decodedText]).size) : '-';
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 font-medium text-slate-200 flex items-center gap-2">
+                        <i data-lucide="file-json" class="w-4 h-4 text-cyan-400"></i>
+                        <span class="truncate max-w-xs">${escapeHtml(file.name)}</span>
+                    </td>
+                    <td class="px-4 py-3 text-slate-400">${formatBytes(file.size)}</td>
+                    <td class="px-4 py-3">${statusBadge}</td>
+                    <td class="px-4 py-3 text-slate-400">${jsonSize}</td>
+                    <td class="px-4 py-3 text-right space-x-2" onclick="event.stopPropagation()">
+                        ${file.status === 'success' ? `
+                            <button onclick="downloadSingleFile('${file.id}')" class="p-1 hover:bg-slate-700 rounded text-cyan-400" title="Download JSON">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                            </button>
+                        ` : ''}
+                        <button onclick="removeFile('${file.id}')" class="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-rose-400" title="Remove">
+                            <i data-lucide="x" class="w-4 h-4"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+            lucide.createIcons();
+        }
+
+        function inspectFile(fileId) {
+            activeFileId = fileId;
+            const file = processedFiles.find(f => f.id === fileId);
+            if (!file) return;
+
+            renderBatchTable();
+
+            document.getElementById('pipeline-inspector').classList.remove('hidden');
+            document.getElementById('output-section').classList.remove('hidden');
+            document.getElementById('active-file-label').innerText = file.name;
+
+            updateStepCard(1, file.stepsData.step1, file.status !== 'processing');
+            updateStepCard(2, file.stepsData.step2, file.stepsData.step2 !== undefined);
+            updateStepCard(3, file.stepsData.step3, file.stepsData.step3 !== undefined);
+            updateStepCard(4, file.stepsData.step4, file.stepsData.step4 !== undefined);
+            updateStepCard(5, file.stepsData.step5, file.status === 'success');
+
+            const statusBadge = document.getElementById('overall-status-badge');
+            const errorBox = document.getElementById('error-log-box');
+            const outputPre = document.getElementById('json-highlighted-output');
+
+            if (file.status === 'success') {
+                statusBadge.className = "px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                statusBadge.innerText = "Pipeline Verified";
+                errorBox.classList.add('hidden');
+                document.getElementById('download-output-btn').disabled = false;
+
+                const formattedJson = JSON.stringify(file.jsonObject, null, 2);
+                outputPre.innerHTML = syntaxHighlightJson(formattedJson);
+
+                const outSize = new Blob([file.decodedText]).size;
+                const ratio = ((outSize / file.size) * 100).toFixed(1) + '%';
+                document.getElementById('output-stats-ratio').innerText = `Decoded JSON Size: ${formatBytes(outSize)} (Ratio: ${ratio})`;
+            } else {
+                statusBadge.className = "px-2.5 py-1 rounded-full text-xs font-mono bg-rose-500/10 text-rose-400 border border-rose-500/20";
+                statusBadge.innerText = "Pipeline Broken";
+                errorBox.classList.remove('hidden');
+                document.getElementById('error-log-msg').innerText = file.error || 'Pipeline failed.';
+                outputPre.innerText = `[PIPELINE FAILURE]:\n${file.error}`;
+                document.getElementById('download-output-btn').disabled = true;
+            }
+        }
+
+        function updateStepCard(stepNum, dataPreview, isSuccess) {
+            const previewEl = document.getElementById(`step-preview-${stepNum}`);
+            const iconEl = document.getElementById(`step-icon-${stepNum}`);
+
+            previewEl.innerText = dataPreview ? dataPreview : "Failed / Not Reached";
+
+            if (isSuccess) {
+                iconEl.setAttribute('data-lucide', 'check-circle-2');
+                iconEl.className = "w-4 h-4 text-emerald-400";
+            } else {
+                iconEl.setAttribute('data-lucide', 'x-circle');
+                iconEl.className = "w-4 h-4 text-rose-400";
+            }
+            lucide.createIcons();
+        }
+
+        function syntaxHighlightJson(jsonStr) {
+            jsonStr = escapeHtml(jsonStr);
+            return jsonStr.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return `<span class="${cls}">${match}</span>`;
+            });
+        }
+
+        function copyToClipboard() {
+            const file = processedFiles.find(f => f.id === activeFileId);
+            if (!file || !file.decodedText) return;
+
+            const textarea = document.createElement('textarea');
+            textarea.value = JSON.stringify(file.jsonObject, null, 2);
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+
+            alert('JSON copied to clipboard!');
+        }
+
+        function downloadActiveFile() {
+            if (activeFileId) downloadSingleFile(activeFileId);
+        }
+
+        function downloadSingleFile(fileId) {
+            const file = processedFiles.find(f => f.id === fileId);
+            if (!file || !file.jsonObject) return;
+
+            const outName = file.name.replace(/\.[^/.]+$/, "") + "_decoded.json";
+            const jsonString = JSON.stringify(file.jsonObject, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = outName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadAllProcessed() {
+            processedFiles.filter(f => f.status === 'success').forEach(f => downloadSingleFile(f.id));
+        }
+
+        function updateBatchControls() {
+            const count = processedFiles.filter(f => f.status === 'success').length;
+            const btn = document.getElementById('batch-download-btn');
+            if (count > 0) {
+                btn.disabled = false;
+                btn.className = "px-3.5 py-1.5 text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-slate-950 rounded-lg transition shadow cursor-pointer flex items-center gap-1.5";
+            } else {
+                btn.disabled = true;
+                btn.className = "px-3.5 py-1.5 text-xs font-medium bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700 rounded-lg transition flex items-center gap-1.5";
+            }
+        }
+
+        function removeFile(fileId) {
+            processedFiles = processedFiles.filter(f => f.id !== fileId);
+            if (activeFileId === fileId) {
+                activeFileId = processedFiles.length > 0 ? processedFiles[0].id : null;
+            }
+
+            if (processedFiles.length === 0) {
+                document.getElementById('batch-table-container').classList.add('hidden');
+                document.getElementById('pipeline-inspector').classList.add('hidden');
+                document.getElementById('output-section').classList.add('hidden');
+            } else {
+                renderBatchTable();
+                if (activeFileId) inspectFile(activeFileId);
+            }
+            updateBatchControls();
+        }
+
+        function clearAll() {
+            processedFiles = [];
+            activeFileId = null;
+            document.getElementById('file-queue-body').innerHTML = '';
+            document.getElementById('batch-table-container').classList.add('hidden');
+            document.getElementById('pipeline-inspector').classList.add('hidden');
+            document.getElementById('output-section').classList.add('hidden');
+            updateBatchControls();
+        }
+
+        function formatBytes(bytes) {
+            if (!+bytes) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>
